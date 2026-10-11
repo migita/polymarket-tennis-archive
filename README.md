@@ -1,10 +1,10 @@
-# Court Archive
+# Polymarket Tennis Terminal
 
 A one-off, public archive of **Polymarket tennis singles match-winner markets with recorded total volume above $5,000**, covering scheduled matches from **11 October 2025 to 11 October 2026**.
 
 **Website:** https://migita.github.io/polymarket-tennis-archive/
 
-The site provides player/tournament search, tour and date filters, monthly navigation, pre-match and full-history charts, decimal odds, CSV exports, and a downloadable SQLite database. It is a static GitHub Pages site. Visitors need no account, installation, API key, or wallet.
+A dense terminal shows one row per match: both players, decimal odds, traded volume, and the price source. It includes live open-market discovery, configurable auto-refresh, player/tournament search, tour and date filters, monthly navigation, historical charts, CSV exports, and a downloadable SQLite database. It is a static GitHub Pages site. Visitors need no account, installation, API key, or wallet.
 
 ## Data semantics
 
@@ -16,7 +16,11 @@ The site provides player/tournament search, tour and date filters, monthly navig
 - Fine-history requests use bounded windows of at most 14 days. Long-range requests use `interval=max`. All price-history cursors are followed. Zero-resolution terminal points are excluded conservatively: the API uses them for both exact ticks and synthetic settlement payouts, without a separate discriminator. This also omits some real exact terminal observations.
 - “Last pre-match odds” uses the final available bucket **ending at or before the scheduled start** (`timestamp + resolution_seconds <= match_time`). It is not necessarily the final quote before actual play. Scheduled starts can be stale or rescheduled.
 - Decimal odds are `1 / token_price`, before fees. Historical prices are not guaranteed executable quotes. A zero price has infinite implied decimal odds; absent data stays absent.
-- This is **one snapshot**, not a continuously running monitor. Reloading the website does not collect new data. Its only browser requests are static assets, archived JSON, and the display font.
+- The downloadable archive is **one fixed snapshot**. The website also fetches current open markets from Gamma and live order books directly from the public CLOB API while the tab is open. Live data is separate from the archive and does not write back to SQLite or GitHub.
+- Live decimal odds use `1 / best_ask`, before fees, independently for each player. The best ask is the lowest positive sell offer with positive size. An empty ask book is unavailable, not a derived or settlement price. Failed scans preserve the previous snapshot and mark it stale. “Open” means the market is not closed in Gamma, not that the tennis match is currently being played.
+- Refresh defaults to **15 minutes**; choose 30 seconds, 1 minute, 5 minutes, 15 minutes, or Off at the top. The preference is saved locally. Each scan checks for a newly published archive as well. Browsers can throttle background tabs; reopening or returning to an overdue tab triggers a fresh check. No collection runs after the page is closed.
+
+The completed snapshot contains **19,326 markets**, **2,075,818 observations**, and **18,215 markets with retained pre-match observations**. There were no failed outcome-history requests. Another 513 markets returned no retained history; missing data is left empty.
 
 See [the collection manifest](site/data/manifest.json) for exact timestamps, counts, resolution coverage, excluded-market counts, and request failures. The archive covers markets returned by the public API, not all matches played during the year. Separate listings for the same players and scheduled start remain separate market IDs; their prices and volumes are not merged.
 
@@ -75,12 +79,13 @@ To make a new snapshot, move `.cache/` aside before starting. Existing history f
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/validate.py
 node --check site/app.js
+node --check site/live.js
 npm ci
 npx playwright install chromium
 npm run test:browser
 ```
 
-Tests cover market classification, strict threshold/date boundaries, cursor handling, settlement exclusion, browser filtering, CSV download, chart interaction, missing data, API-file errors, and mobile overflow. The artifact validator scans every market and observation and reconciles counts with the manifest.
+Tests cover market classification, strict threshold/date boundaries, cursor handling, settlement exclusion, browser filtering, CSV download, chart interaction, missing data, API-file errors, mobile overflow, live market selection, independent ask prices, stale quotes after API failure, refresh timing, and persistent refresh settings. The artifact validator scans every market and observation and reconciles counts with the manifest.
 
 ## Publishing
 

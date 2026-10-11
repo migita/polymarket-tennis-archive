@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('https://gamma-api.polymarket.com/**', (route) => route.fulfill({ json: { markets: [], next_cursor: null } }));
+});
+
 test('loads real data, filters, inspects history and exports CSV', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -18,8 +22,9 @@ test('loads real data, filters, inspects history and exports CSV', async ({ page
   await page.locator('#search').fill('this player does not exist 123xyz');
   await expect(page.locator('#empty')).toBeVisible();
   await expect(page.locator('#result-count')).toContainText('0 of');
-  await page.getByRole('button', { name: 'Reset filters' }).click();
+  await page.locator('#reset').click();
   await expect(page.locator('#matches tr')).toHaveCount(30);
+  await expect(page.locator('#matches tr').first().locator('td')).toHaveCount(8);
   await page.locator('#next').click();
   await expect(page.locator('#page-info')).toContainText('2 /');
   const player = await page.locator('#matches tr').first().locator('.match-button').innerText();

@@ -271,7 +271,7 @@ def export(discovery, collected):
                 inProgress=len(summaries) < len(discovery['markets']), withHistory=available, withPreMatch=pre_available,
                 pricePointCount=count, failedOutcomes=errors, resolutions=dict(resolutions), months=months,
                 sources=['https://gamma-api.polymarket.com/markets/keyset', 'https://data-api.polymarket.com/v2/prices-history'],
-                notes=['One-off archive; no automatic updates or background collection.',
+                notes=['One-off historical archive; live browser quotes are separate and do not update this database.',
                        'History availability and spacing vary. Missing points are not interpolated or fabricated.',
                        'Zero-resolution terminal points are excluded conservatively: the API uses them for both exact ticks and synthetic settlement payouts.',
                        'Decimal odds equal 1 / token price, before fees; historical prices are not executable quotes.',

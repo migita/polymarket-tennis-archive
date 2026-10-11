@@ -1,3 +1,5 @@
+import { fetchLive } from './live.js';
+
 const $ = (id) => document.getElementById(id);
 const number = new Intl.NumberFormat('en-GB');
 const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
@@ -6,7 +8,7 @@ const dateTime = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'shor
 const dayTime = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
 const monthName = new Intl.DateTimeFormat('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
 const PAGE_SIZE = 30;
-const state = { markets: [], filtered: [], page: 0, selected: null, history: null, range: 'pre', requestId: 0, manifest: null, cache: new Map() };
+const state = { archive: [], live: [], refreshing: false, interval: 900, nextRefresh: 0, lastLiveAt: 0, markets: [], filtered: [], page: 0, selected: null, history: null, range: 'pre', requestId: 0, manifest: null, cache: new Map() };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const formatTime = (t) => dateTime.format(new Date(t * 1000));
@@ -15,7 +17,7 @@ const resolution = (s) => s < 3600 ? `${s / 60} min` : `${s / 3600} hr`;
 const priceText = (p) => `${(p * 100).toFixed(1)}%`;
 
 async function getJson(path) {
-  const response = await fetch(path);
+  const response = await fetch(path, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
@@ -29,16 +31,8 @@ function renderOverview() {
   $('stat-history').textContent = number.format(m.withHistory);
   $('stat-coverage').textContent = `${number.format(m.withPreMatch)} with pre-match observations`;
   $('stat-points').textContent = compact.format(m.pricePointCount);
-  $('stat-volume').textContent = `$${compact.format(state.markets.reduce((sum, x) => sum + x.volume, 0))}`;
+  $('stat-volume').textContent = `$${compact.format(state.archive.reduce((sum, x) => sum + x.volume, 0))}`;
   $('collected-at').textContent = `Match window ends ${dateTime.format(new Date(m.snapshotAt))} UTC. Collection completed ${dateTime.format(new Date(m.generatedAt))} UTC. ${m.failedOutcomes ? `${m.failedOutcomes} outcome histories could not be fetched; see the manifest.` : 'A single snapshot, ready to explore or download.'}`;
-  const tours = [...new Set(state.markets.map((x) => x.tour))].sort();
-  $('tour').innerHTML += tours.map((x) => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('');
-  for (const id of ['from', 'to']) {
-    $(id).min = m.from.slice(0, 10);
-    $(id).max = m.to.slice(0, 10);
-  }
-  $('from').value = m.from.slice(0, 10);
-  $('to').value = m.to.slice(0, 10);
   const max = Math.max(...Object.values(m.months).map((x) => x.matches), 1);
   const cursor = new Date(`${m.from.slice(0, 7)}-01T00:00:00Z`);
   const final = m.to.slice(0, 7);
@@ -50,7 +44,7 @@ function renderOverview() {
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
   $('timeline').innerHTML = months.join('');
-  $('timeline').addEventListener('click', (event) => {
+  $('timeline').onclick = (event) => {
     const button = event.target.closest('[data-month]');
     if (!button) return;
     const month = button.dataset.month;
@@ -61,31 +55,37 @@ function renderOverview() {
     $('to').value = [last.toISOString().slice(0, 10), m.to.slice(0, 10)].sort()[0];
     document.querySelectorAll('.month').forEach((b) => b.classList.toggle('active', b === button));
     filter();
-  });
+  };
 }
 
-function filter() {
+function filter(resetPage = true) {
   const q = fold($('search').value.trim());
   const from = $('from').value ? Date.parse($('from').value + 'T00:00:00Z') / 1000 : -Infinity;
   const to = $('to').value ? Date.parse($('to').value + 'T00:00:00Z') / 1000 + 86400 : Infinity;
   const tour = $('tour').value;
   const withHistory = $('has-history').checked;
-  state.filtered = state.markets.filter((m) => (!q || m.searchText.includes(q)) && (!tour || m.tour === tour) && m.matchTime >= from && m.matchTime < to && (!withHistory || m.preMatch.some((p) => p.count > 0)));
+  const view = $('market-view').value;
+  state.filtered = state.markets.filter((m) => (view !== 'live' || m.live) && (view !== 'archive' || m.archived) && (!q || m.searchText.includes(q)) && (!tour || m.tour === tour) && m.matchTime >= from && m.matchTime < to && (!withHistory || m.preMatch.some((p) => p.count > 0)));
   state.filtered.sort((a, b) => $('sort').value === 'volume' ? b.volume - a.volume : $('sort').value === 'oldest' ? a.matchTime - b.matchTime : b.matchTime - a.matchTime);
-  state.page = 0;
+  state.page = resetPage ? 0 : Math.min(state.page, Math.max(0, Math.ceil(state.filtered.length / PAGE_SIZE) - 1));
   // Keep the detail within the visible selection, including after filters become empty.
   if (!state.filtered.some((m) => m.id === state.selected?.id)) {
     state.selected = null;
     state.history = null;
     state.requestId++;
-    $('detail').innerHTML = '<div class="detail-placeholder"><div class="crosshair">+</div><p class="eyebrow">A CLOSER LOOK</p><h3>Select a match.</h3><p>Explore historical prices and pre-match odds.</p></div>';
+    $('detail').innerHTML = '<div class="detail-placeholder"><h3>SELECT A MARKET</h3><p>Inspect price history and quote details.</p></div>';
   }
   renderTable();
 }
 
 function renderTable() {
   const rows = state.filtered.slice(state.page * PAGE_SIZE, (state.page + 1) * PAGE_SIZE);
-  $('matches').innerHTML = rows.map((m) => `<tr data-id="${m.id}" class="${state.selected?.id === m.id ? 'selected' : ''}"><td><button class="match-button" type="button" aria-pressed="${state.selected?.id === m.id}"><span class="match-tournament">${escapeHtml(m.tournament)}</span>${escapeHtml(m.players[0])}<br>${escapeHtml(m.players[1])}<span class="match-date"><span class="tour-tag">${escapeHtml(m.tour)}</span>${formatTime(m.matchTime)}</span></button></td><td class="number volume-cell" title="$${number.format(m.volume)} recorded total volume">$${compact.format(m.volume)}</td><td class="number odds-cell">${m.preMatch.some((x) => x.last) ? m.preMatch.map((x, i) => `<span class="odds-pair" title="${escapeHtml(m.players[i])}${x.last ? ': ' + formatTime(x.last[0]) + ' UTC' : ': no pre-match history'}"><span class="dot ${i ? 'second' : ''}"></span>${odds(x.last?.[1])}</span>`).join('') : '<span class="no-history">No pre-match<br>history</span>'}</td></tr>`).join('');
+  $('matches').innerHTML = rows.map((m) => {
+    const prices = m.live ? m.live.asks.map((a) => a?.price) : m.preMatch.map((p) => p.last?.[1]);
+    const source = m.live ? (m.live.stale ? 'STALE ASK' : m.live.asks.some(Boolean) ? 'LIVE ASK' : 'NO ASK') : 'ARCHIVE';
+    const sourceTitle = m.live ? `Checked ${dateTime.format(new Date(m.live.fetchedAt))} UTC${m.live.acceptingOrders ? '' : ' · orders not accepted'}` : 'Last retained pre-match price; see detail for timestamp';
+    return `<tr data-id="${m.id}" class="${state.selected?.id === m.id ? 'selected' : ''}" title="${escapeHtml(m.tournament)}"><td class="date-cell">${formatTime(m.matchTime)}</td><td><span class="tour-tag">${escapeHtml(m.tour)}</span></td><td class="player-cell"><button class="match-button" type="button" aria-label="Inspect ${escapeHtml(m.players.join(' vs '))}" aria-pressed="${state.selected?.id === m.id}">${escapeHtml(m.players[0])}</button></td><td class="number odds-cell ${m.live && !m.live.stale ? 'live-odds' : ''}">${odds(prices[0])}</td><td class="player-cell">${escapeHtml(m.players[1])}</td><td class="number odds-cell ${m.live && !m.live.stale ? 'live-odds' : ''}">${odds(prices[1])}</td><td class="number volume-cell" title="$${number.format(m.volume)} ${m.live ? 'at latest scan' : 'at archive collection'}">$${compact.format(m.volume)}</td><td><span title="${escapeHtml(sourceTitle)}" class="source-label ${m.live ? m.live.stale ? 'stale' : 'live' : ''}">${source}</span></td></tr>`;
+  }).join('');
   $('result-count').textContent = `${number.format(state.filtered.length)} of ${number.format(state.markets.length)} matches`;
   const pages = Math.ceil(state.filtered.length / PAGE_SIZE);
   $('page-info').textContent = pages ? `${state.page + 1} / ${pages}` : '0 matches';
@@ -109,9 +109,9 @@ async function selectMatch(id, scroll = false) {
   $('detail').innerHTML = '<p class="loading-detail" role="status">Loading match history…</p>';
   if (scroll && window.innerWidth <= 800) $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
   try {
-    const data = state.cache.get(id) ?? await getJson(`./data/history/${encodeURIComponent(id)}.json`);
+    const data = market.archived ? state.cache.get(id) ?? await getJson(`./data/history/${encodeURIComponent(id)}.json`) : { outcomes: market.players.map((player, i) => ({ player, tokenId: market.tokenIds[i], points: [] })) };
     if (requestId !== state.requestId) return;
-    state.cache.set(id, data);
+    if (market.archived) state.cache.set(id, data);
     state.history = data;
     renderDetail();
   } catch (error) {
@@ -123,14 +123,23 @@ async function selectMatch(id, scroll = false) {
 
 function renderDetail() {
   const m = state.selected;
-  $('detail').innerHTML = `<div class="detail-top"><div class="detail-kicker"><span>${escapeHtml(m.tour)} / ${escapeHtml(m.tournament)}</span><span class="status-tag">${m.closed ? 'CLOSED MARKET' : 'OPEN AT COLLECTION'}</span></div><h3>${escapeHtml(m.players[0])}<span class="versus">vs</span>${escapeHtml(m.players[1])}</h3><div class="detail-sub"><span>${formatTime(m.matchTime)} UTC</span><span>·</span><span>$${number.format(m.volume)} traded</span><a href="https://polymarket.com/event/${encodeURIComponent(m.slug)}" target="_blank" rel="noopener">Polymarket ↗</a></div></div><div class="odds-cards">${m.preMatch.map((p, i) => `<div class="odds-card"><div class="player-label"><span class="dot ${i ? 'second' : ''}"></span>${escapeHtml(m.players[i])}</div><strong class="odds-value">${odds(p.last?.[1])}</strong><div class="odds-caption">LAST PRE-MATCH DECIMAL ODDS${p.last ? `<time>Bucket starts ${formatTime(p.last[0])} UTC</time><span>${priceText(p.last[1])} implied probability · ${resolution(p.last[2])} resolution</span>` : '<time>No observation before scheduled start</time>'}</div></div>`).join('')}</div><div class="chart-section"><div class="chart-heading"><span>IMPLIED PROBABILITY</span><div class="segmented" aria-label="Price history range"><button type="button" data-range="pre" class="active" aria-pressed="true">Pre-match</button><button type="button" data-range="all" aria-pressed="false">Full history</button></div></div><div class="chart-legend">${m.players.map((p, i) => `<span><span class="dot ${i ? 'second' : ''}"></span>${escapeHtml(p)}</span>`).join('')}</div><div id="chart" class="chart-wrap"></div><div id="chart-tooltip" class="chart-tooltip" aria-live="polite" hidden></div><input id="sample-slider" class="sample-slider" type="range" min="0" max="0" value="0" aria-label="Explore individual price observations" hidden><p id="chart-hint" class="chart-hint"></p></div><div class="detail-bottom"><span id="history-count"></span><button id="export-history" type="button">↓ Download match prices (CSV)</button></div>`;
-  document.querySelectorAll('[data-range]').forEach((b) => b.onclick = () => {
+  $('detail').innerHTML = `<div class="detail-top"><div class="detail-kicker"><span>${escapeHtml(m.tour)} / ${escapeHtml(m.tournament)}</span><span class="status-tag">${m.live ? m.live.stale ? 'STALE LIVE SNAPSHOT' : 'OPEN MARKET' : m.closed ? 'CLOSED AT COLLECTION' : 'OPEN AT COLLECTION'}</span></div><h3>${escapeHtml(m.players[0])}<span class="versus">vs</span>${escapeHtml(m.players[1])}</h3><div class="detail-sub"><span>${formatTime(m.matchTime)} UTC</span><span>·</span><span>$${number.format(m.volume)} traded</span><a href="https://polymarket.com/event/${encodeURIComponent(m.slug)}" target="_blank" rel="noopener">Polymarket ↗</a></div></div><div class="odds-cards">${m.preMatch.map((p, i) => {
+    const ask = m.live?.asks[i];
+    const value = m.live ? ask?.price : p.last?.[1];
+    const caption = m.live ? `${m.live.stale ? 'STALE' : 'LIVE'} BEST ASK · DECIMAL ODDS<time>Checked ${dateTime.format(new Date(m.live.fetchedAt))} UTC</time>${ask ? `<span>${priceText(ask.price)} ask · ${number.format(ask.size)} shares at this price</span>` : '<span>No available ask; no executable buy quote</span>'}` : `LAST PRE-MATCH DECIMAL ODDS${p.last ? `<time>Bucket starts ${formatTime(p.last[0])} UTC</time><span>${priceText(p.last[1])} implied probability · ${resolution(p.last[2])} resolution</span>` : '<time>No observation before scheduled start</time>'}`;
+    return `<div class="odds-card"><div class="player-label"><span class="dot ${i ? 'second' : ''}"></span>${escapeHtml(m.players[i])}</div><strong class="odds-value">${odds(value)}</strong><div class="odds-caption">${caption}</div></div>`;
+  }).join('')}</div><div class="chart-section"><div class="chart-heading"><span>IMPLIED PROBABILITY</span><div class="segmented" aria-label="Price history range"><button type="button" data-range="pre" class="active" aria-pressed="true">Pre-match</button><button type="button" data-range="all" aria-pressed="false">Full history</button></div></div><div class="chart-legend">${m.players.map((p, i) => `<span><span class="dot ${i ? 'second' : ''}"></span>${escapeHtml(p)}</span>`).join('')}</div><div id="chart" class="chart-wrap"></div><div id="chart-tooltip" class="chart-tooltip" aria-live="polite" hidden></div><input id="sample-slider" class="sample-slider" type="range" min="0" max="0" value="0" aria-label="Explore individual price observations" hidden><p id="chart-hint" class="chart-hint"></p></div><div class="detail-bottom"><span id="history-count"></span><button id="export-history" type="button">↓ Download match prices (CSV)</button></div>`;
+  document.querySelectorAll('[data-range]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.range === state.range);
+    b.setAttribute('aria-pressed', String(b.dataset.range === state.range));
+    b.onclick = () => {
     state.range = b.dataset.range;
     document.querySelectorAll('[data-range]').forEach((x) => {
       x.classList.toggle('active', x === b);
       x.setAttribute('aria-pressed', String(x === b));
     });
     renderChart();
+    };
   });
   $('export-history').onclick = exportHistory;
   renderChart();
@@ -147,7 +156,7 @@ function renderChart() {
   $('sample-slider').hidden = !samples.length;
   if (!samples.length) {
     const failed = state.history.outcomes.some((o) => o.error);
-    $('chart').innerHTML = `<div class="chart-empty">${failed ? 'The source request failed for one or both players.' : state.range === 'pre' && state.history.outcomes.some((o) => o.points.length) ? 'No retained observations before the scheduled start.<br>Switch to full history to see the available prices.' : 'No retained price history was returned for this match.'}</div>`;
+    $('chart').innerHTML = `<div class="chart-empty">${failed ? 'The source request failed for one or both players.' : state.range === 'pre' && state.history.outcomes.some((o) => o.points.length) ? 'No retained observations before the scheduled start.<br>Switch to full history to see the available prices.' : !m.archived ? 'Live market; no history in the one-off archive.' : 'No retained price history was returned for this match.'}</div>`;
     $('chart-hint').textContent = 'Missing history is left empty. The market’s final price is not used as a historical substitute.';
     return;
   }
@@ -156,7 +165,7 @@ function renderChart() {
   const span = max - min || 3600;
   const x = (t) => left + (t - min) / span * (W - left - right);
   const y = (p) => top + (1 - p) * (H - top - bottom);
-  const colors = ['#306b50', '#b87146'];
+  const colors = ['#65c8ed', '#df9b51'];
   let svg = `<svg id="price-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Historical implied probabilities for ${escapeHtml(m.players.join(' and '))}. Use the slider below to read individual observations.">`;
   for (const p of [0, .25, .5, .75, 1]) svg += `<line class="chart-grid" x1="${left}" x2="${W - right}" y1="${y(p)}" y2="${y(p)}"/><text class="chart-label" x="${left - 8}" y="${y(p) + 3}" text-anchor="end">${p * 100}%</text>`;
   for (const [i, o] of outcomes.entries()) {
@@ -222,11 +231,11 @@ function downloadCsv(name, rows) {
 }
 
 function exportMarkets() {
-  const rows = [['market_id', 'tournament', 'tour', 'scheduled_start_utc', 'player_1', 'player_2', 'total_volume_usd_at_collection', 'player_1_last_pre_match_price', 'player_1_decimal_odds', 'player_1_bucket_start_utc', 'player_2_last_pre_match_price', 'player_2_decimal_odds', 'player_2_bucket_start_utc', 'history_points', 'url']];
+  const rows = [['market_id', 'tournament', 'tour', 'scheduled_start_utc', 'player_1', 'player_2', 'total_volume_usd_at_latest_scan_or_archive', 'player_1_last_pre_match_price', 'player_1_decimal_odds', 'player_1_bucket_start_utc', 'player_2_last_pre_match_price', 'player_2_decimal_odds', 'player_2_bucket_start_utc', 'history_points', 'url', 'display_price_source', 'live_checked_utc', 'player_1_best_ask', 'player_1_live_decimal_odds', 'player_2_best_ask', 'player_2_live_decimal_odds']];
   for (const m of state.filtered) {
     rows.push([m.id, m.tournament, m.tour, new Date(m.matchTime * 1000).toISOString(), ...m.players, m.volume,
       ...m.preMatch.flatMap((p) => p.last ? [p.last[1], p.last[1] > 0 ? 1 / p.last[1] : 'Infinity', new Date(p.last[0] * 1000).toISOString()] : ['', '', '']),
-      m.historyPoints, `https://polymarket.com/event/${m.slug}`]);
+      m.historyPoints, `https://polymarket.com/event/${m.slug}`, m.live ? m.live.stale ? 'stale_ask' : 'live_ask' : 'archive_pre_match', m.live ? new Date(m.live.fetchedAt).toISOString() : '', ...[0, 1].flatMap((i) => m.live?.asks[i] ? [m.live.asks[i].price, 1 / m.live.asks[i].price] : ['', ''])]);
   }
   downloadCsv('tennis-matches.csv', rows);
 }
@@ -240,7 +249,7 @@ function exportHistory() {
 
 function resetDates() {
   $('from').value = state.manifest.from.slice(0, 10);
-  $('to').value = state.manifest.to.slice(0, 10);
+  $('to').value = ''; // Include newly discovered upcoming matches.
   document.querySelectorAll('.month').forEach((b) => b.classList.remove('active'));
 }
 
@@ -248,16 +257,18 @@ async function init() {
   try {
     const [manifest, markets] = await Promise.all([getJson('./data/manifest.json'), getJson('./data/markets.json')]);
     state.manifest = manifest;
-    state.markets = markets.map((m) => ({ ...m, searchText: fold(`${m.title} ${m.players.join(' ')}`) }));
+    state.archive = markets;
+    mergeMarkets();
     renderOverview();
+    resetDates();
     $('filters').onsubmit = (event) => event.preventDefault();
-    $('search').oninput = filter;
-    for (const id of ['tour', 'sort', 'from', 'to', 'has-history']) $(id).onchange = () => {
+    $('search').oninput = () => filter();
+    for (const id of ['market-view', 'tour', 'sort', 'from', 'to', 'has-history']) $(id).onchange = () => {
       if (id === 'from' || id === 'to') document.querySelectorAll('.month').forEach((b) => b.classList.remove('active'));
       filter();
     };
     $('all-months').onclick = () => { resetDates(); filter(); };
-    $('reset').onclick = () => { $('filters').reset(); $('has-history').checked = false; resetDates(); filter(); };
+    $('reset').onclick = () => { HTMLFormElement.prototype.reset.call($('filters')); $('has-history').checked = false; resetDates(); filter(); };
     $('prev').onclick = () => { state.page--; renderTable(); };
     $('next').onclick = () => { state.page++; renderTable(); };
     $('matches').onclick = (event) => { const row = event.target.closest('[data-id]'); if (row) selectMatch(row.dataset.id, true); };
@@ -266,11 +277,98 @@ async function init() {
     const requested = new URLSearchParams(location.search).get('match');
     const first = state.markets.find((m) => m.id === requested) ?? state.filtered.find((m) => m.preMatch.some((p) => p.count));
     if (first) selectMatch(first.id);
+    startRefresh();
   } catch (error) {
     $('result-count').textContent = 'Archive unavailable';
+    $('live-status').textContent = 'LOAD FAILED · RELOAD TO RETRY';
+    $('live-status').classList.add('error');
     $('load-error').hidden = false;
     $('load-error').textContent = `The archive could not be loaded (${error.message}). Please reload the page. If running locally, use an HTTP server rather than opening index.html directly.`;
   }
+}
+
+function mergeMarkets() {
+  const merged = new Map(state.archive.map((m) => [m.id, { ...m, archived: true }]));
+  for (const live of state.live) {
+    const archived = merged.get(live.id);
+    // Retain historical summaries while overlaying the current open-market metadata.
+    merged.set(live.id, { ...live, ...(archived ? { archived: true, preMatch: archived.preMatch, historyPoints: archived.historyPoints } : {}) });
+  }
+  state.markets = [...merged.values()].map((m) => ({ ...m, searchText: fold(`${m.title} ${m.players.join(' ')} ${m.tournament}`) }));
+  const tour = $('tour').value;
+  $('tour').innerHTML = '<option value="">All tours</option>' + [...new Set(state.markets.map((m) => m.tour))].sort().map((t) => `<option>${escapeHtml(t)}</option>`).join('');
+  $('tour').value = tour;
+  if (state.selected) state.selected = state.markets.find((m) => m.id === state.selected.id) ?? null;
+}
+
+async function refreshArchive() {
+  const stamp = Date.now();
+  const manifest = await getJson(`./data/manifest.json?refresh=${stamp}`);
+  if (manifest.generatedAt === state.manifest.generatedAt) return false;
+  const markets = await getJson(`./data/markets.json?refresh=${stamp}`);
+  if (!Array.isArray(markets) || markets.length !== manifest.matchCount) throw new Error('Archive publication incomplete');
+  state.archive = markets;
+  state.manifest = manifest;
+  state.cache.clear();
+  return true;
+}
+
+async function refresh() {
+  if (state.refreshing) return;
+  state.refreshing = true;
+  $('refresh-now').disabled = true;
+  $('live-status').textContent = 'SCANNING OPEN MARKETS / FETCHING ORDER BOOKS…';
+  const [archive, live] = await Promise.allSettled([refreshArchive(), fetchLive()]);
+  if (live.status === 'fulfilled') {
+    state.live = live.value;
+    state.lastLiveAt = Date.now();
+    const quoted = state.live.filter((m) => m.live.asks.some(Boolean)).length;
+    $('live-status').textContent = `CONNECTED · ${state.live.length} OPEN MARKETS · ${quoted} WITH ASKS${archive.status === 'rejected' ? ' · ARCHIVE CHECK FAILED' : ''}`;
+    $('live-status').classList.toggle('error', archive.status === 'rejected');
+  } else {
+    state.live.forEach((m) => { m.live.stale = true; });
+    $('live-status').textContent = `LIVE REFRESH FAILED · ${live.reason.message} · ${state.live.length ? 'PREVIOUS QUOTES ARE STALE' : 'ARCHIVE AVAILABLE'}`;
+    $('live-status').classList.add('error');
+  }
+  $('live-updated').textContent = state.lastLiveAt ? `LAST SUCCESS ${new Date(state.lastLiveAt).toISOString().slice(11, 19)} UTC · ${state.live.some((m) => m.live.stale) ? 'STALE' : 'ASK ODDS BEFORE FEES'}` : 'NO SUCCESSFUL LIVE SCAN';
+  mergeMarkets();
+  if (archive.status === 'fulfilled' && archive.value) renderOverview();
+  filter(false);
+  if (state.selected && state.history) {
+    if (archive.status === 'fulfilled' && archive.value && state.selected.archived) await selectMatch(state.selected.id);
+    else renderDetail();
+  }
+  state.refreshing = false;
+  $('refresh-now').disabled = false;
+  state.nextRefresh = state.interval ? Date.now() + state.interval * 1000 : 0;
+  tick();
+}
+
+function tick() {
+  $('utc-clock').textContent = `${new Date().toISOString().slice(11, 19)} UTC`;
+  if (state.refreshing) { $('refresh-countdown').textContent = 'UPDATING'; return; }
+  if (!state.interval) { $('refresh-countdown').textContent = 'PAUSED'; return; }
+  const remaining = Math.max(0, Math.ceil((state.nextRefresh - Date.now()) / 1000));
+  $('refresh-countdown').textContent = `${Math.floor(remaining / 60).toString().padStart(2, '0')}:${(remaining % 60).toString().padStart(2, '0')}`;
+  if (!remaining) refresh();
+}
+
+function startRefresh() {
+  try {
+    const saved = localStorage.getItem('tennis-refresh-seconds');
+    if (saved !== null && ['0', '30', '60', '300', '900'].includes(saved)) state.interval = Number(saved);
+  } catch { /* Storage can be disabled; in-memory controls still work. */ }
+  $('refresh-interval').value = String(state.interval);
+  $('refresh-interval').onchange = () => {
+    state.interval = Number($('refresh-interval').value);
+    try { localStorage.setItem('tennis-refresh-seconds', String(state.interval)); } catch { /* Optional preference. */ }
+    state.nextRefresh = state.interval ? Date.now() + state.interval * 1000 : 0;
+    tick();
+  };
+  $('refresh-now').onclick = refresh;
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  refresh();
+  setInterval(tick, 1000);
 }
 
 init();

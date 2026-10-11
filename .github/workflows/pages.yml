@@ -26,6 +26,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py'
           python3 scripts/validate.py
           node --check site/app.js
+          node --check site/live.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
