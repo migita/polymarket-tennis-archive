@@ -1,0 +1,12 @@
+{
+  "name": "polymarket-tennis-archive",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 4173 --directory site",
+    "test": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {"@playwright/test": "1.64.0"}
+}

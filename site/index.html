@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore a year of Polymarket tennis singles markets above $5,000. Historical prices, pre-match odds, and an open, downloadable database.">
+  <meta name="theme-color" content="#153c30">
+  <title>Court Archive · Polymarket tennis</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Court Archive home"><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="16"/><path d="M5 8c13 1 22 10 23 23M8 5c1 13 10 22 23 23"/></svg><span>COURT <strong>ARCHIVE</strong></span></a>
+    <div class="top-links"><span class="snapshot-badge"><i></i> ONE-OFF SNAPSHOT</span><a href="https://github.com/migita/polymarket-tennis-archive" target="_blank" rel="noopener">Source ↗</a></div>
+  </header>
+  <div id="preview-banner" class="preview-banner" role="status" hidden></div>
+  <main>
+    <section class="hero">
+      <div class="hero-copy"><p class="eyebrow">POLYMARKET / TENNIS SINGLES</p><h1>A year on court.<br><span>Every market tells a story.</span></h1><p class="intro">Explore match-winner markets with more than $5,000 traded.<br class="desktop-only"> Follow the prices, compare the odds, take the data with you.</p><div class="period"><span class="small-icon">↳</span><span id="period">Loading archive dates…</span><span class="period-divider"></span><span>All times UTC</span></div></div>
+      <div class="court-art" aria-hidden="true"><svg viewBox="0 0 300 270"><g transform="translate(40 15) rotate(12 110 125)"><rect x="0" y="0" width="220" height="245" rx="1"/><path d="M28 0v245M192 0v245M28 58h164M28 187h164M110 58v129M0 122.5h220"/><path class="net" d="M-8 122.5h236"/><circle class="ball-shadow" cx="162" cy="175" r="13"/><circle class="ball" cx="157" cy="164" r="13"/><path class="ball-seam" d="M146 156q17 2 21 18"/></g></svg><span>THE PRICE OF A POINT.</span></div>
+    </section>
+    <section class="stats" aria-label="Archive overview"><div><span class="stat-label">SINGLES MARKETS</span><strong id="stat-matches">—</strong><small>Singles · match winner</small></div><div><span class="stat-label">WITH PRICE HISTORY</span><strong id="stat-history">—</strong><small id="stat-coverage">Checking availability</small></div><div><span class="stat-label">PRICE OBSERVATIONS</span><strong id="stat-points">—</strong><small>Both players · source timestamps</small></div><div><span class="stat-label">RECORDED VOLUME</span><strong id="stat-volume">—</strong><small>Total market volume at collection</small></div></section>
+    <div class="archive-note"><span class="note-symbol">i</span><p><strong>Historical data, with its limits.</strong> Older prices are coarser and may be sparse. The $5,000 filter uses total recorded volume, which may include trading after the match started. <a href="#methodology">How to read this archive ↓</a></p></div>
+    <section class="timeline-section" aria-label="Matches by month"><div class="section-label"><span>THE SEASON, MONTH BY MONTH</span><button id="all-months" class="text-button" type="button">View full year ↗</button></div><div id="timeline" class="timeline"></div></section>
+    <section id="explorer" class="explorer">
+      <div class="explorer-heading"><div><p class="eyebrow">THE MATCH INDEX</p><h2>Find your match.</h2></div><button id="export-markets" class="outline-button" type="button" disabled>↓ Export filtered matches</button></div>
+      <form id="filters" class="filters" role="search">
+        <label class="search-label"><span class="sr-only">Search players or tournaments</span><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Player or tournament…" autocomplete="off"></label>
+        <label><span>Tour</span><select id="tour"><option value="">All tours</option></select></label>
+        <label><span>From</span><input id="from" type="date"></label><label><span>To</span><input id="to" type="date"></label>
+        <label><span>Sort by</span><select id="sort"><option value="recent">Newest first</option><option value="oldest">Oldest first</option><option value="volume">Highest volume</option></select></label>
+      </form>
+      <div class="results-meta"><span id="result-count" role="status">Loading the archive…</span><label class="check-label"><input id="has-history" type="checkbox"> With pre-match history only</label><button id="reset" class="text-button" type="button">Reset filters</button></div>
+      <div id="load-error" class="error-message" hidden></div>
+      <div class="workspace">
+        <div class="match-index"><div class="table-scroll"><table><thead><tr><th>Match / scheduled start</th><th>Volume</th><th>Pre-match odds <span title="Last available price bucket ending by scheduled start. Decimal odds = 1 / price, before fees.">ⓘ</span></th></tr></thead><tbody id="matches"></tbody></table></div><div id="empty" class="empty-state" hidden><span>○</span><h3>No matches in this selection.</h3><p>Try another player, a wider date range, or reset the filters.</p></div><nav class="pagination" aria-label="Match pages"><button id="prev" type="button" disabled>← Previous</button><span id="page-info">—</span><button id="next" type="button" disabled>Next →</button></nav></div>
+        <aside id="detail" class="detail" aria-label="Selected match"><div class="detail-placeholder"><div class="crosshair">+</div><p class="eyebrow">A CLOSER LOOK</p><h3>Select a match.</h3><p>Explore each player’s historical price<br>and the last available pre-match odds.</p></div></aside>
+      </div>
+    </section>
+    <section id="methodology" class="methodology"><div><p class="eyebrow">READ THE FINE PRINT</p><h2>What’s in the archive.</h2><p id="collected-at">A single collection of publicly available Polymarket data.</p><a class="solid-button" href="./data/tennis-archive.sqlite.zip" download>↓ Download the SQLite database</a></div><div class="method-items"><details open><summary>Which matches are included?</summary><p>Tennis-tagged match-winner markets with two named players and recorded market volume strictly above $5,000. Match dates use Polymarket’s scheduled start time. Doubles, tournament winners, handicaps, totals, and completed-match bets are excluded. The archive covers discoverable markets, not every tennis match played. Separate Polymarket listings remain separate rows.</p></details><details><summary>How precise is the price history?</summary><p>Recent histories request 15-minute prices. Older histories request 30-minute or 3-hour data, with coarser fallback where needed. Each observation retains the resolution and timestamp returned by Polymarket; actual gaps may be longer. No missing observations are invented. Zero-resolution terminal points are omitted because they can represent either exact ticks or synthetic settlement payouts. A market can be present even when price history is unavailable.</p></details><details><summary>What do the odds and volume mean?</summary><p>Decimal odds are 1 ÷ token price, before fees. For example, a $0.40 token corresponds to 2.50 decimal odds. Historical chart prices are not guaranteed executable buy quotes. “Pre-match” includes only price buckets ending by the API’s scheduled start, which can differ from actual play. Chart timestamps mark bucket starts, not exact observation times. The total volume filter cannot establish whether $5,000 was reached before the match.</p></details><details><summary>Does the site keep collecting?</summary><p>No. This is a one-off snapshot, served entirely from GitHub Pages. Reloading the site does not update market data. The repository includes a resumable import script and the database for independent analysis.</p></details><details><summary>Sources and data format</summary><p>Market metadata comes from <a href="https://docs.polymarket.com/api-reference/markets/list-markets-keyset-pagination" target="_blank" rel="noopener">Polymarket Gamma</a>. Prices come from the <a href="https://docs.polymarket.com/api-reference/markets/get-a-tokens-price-history" target="_blank" rel="noopener">Data API price-history endpoint</a>. The <a href="./data/manifest.json">collection manifest</a> records coverage, exclusions, and errors. The ZIP contains a SQLite database with markets, prices, and metadata tables. Timestamps are Unix seconds in UTC.</p></details></div></section>
+  </main>
+  <footer><a class="brand footer-brand" href="./">COURT <strong>ARCHIVE</strong></a><span>Independent archive. Not affiliated with Polymarket.</span><a href="https://github.com/migita/polymarket-tennis-archive" target="_blank" rel="noopener">Explore the source ↗</a></footer>
+</body>
+</html>
